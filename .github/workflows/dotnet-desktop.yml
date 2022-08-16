@@ -1,0 +1,67 @@
+#
+# Github Action
+# Build and packet the .Net application
+#
+name: .NET Core Desktop
+
+on: [ push ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+    runs-on: windows-latest  # For a list of available runner types, refer to
+                             # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
+
+    env:
+      Solution_Name: Redate.sln
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    # Install the .NET Core workload
+    - name: Install .NET Core
+      uses: actions/setup-dotnet@v2
+      with:
+        dotnet-version: 6.0.x
+
+    - name: Install dependencies
+      run: dotnet restore
+
+    - name: Inject build number
+      shell: pwsh
+      run: |
+        $csproj = New-Object System.XML.XMLDocument
+        $csprojPath = Resolve-Path "Redate.csproj"
+        Write-Host "Solution: $csprojPath"
+        $csproj.Load($csprojPath)
+        $version = New-Object System.Version $csproj.Project.PropertyGroup.Version
+        $version = New-Object System.Version @( $version.Major, $version.Minor, ([System.Math]::Max(0, $version.Build)), $env:GITHUB_RUN_NUMBER )
+        Write-Host "Version number: $version"
+        $csproj.Project.PropertyGroup.Version = $version.ToString()
+        $csproj.Save($csprojPath)
+        Write-Output "FULL_VERSION_NUMBER=$version" >> $env:GITHUB_ENV
+
+    - name: Build application
+      run: dotnet build --configuration ${{ matrix.configuration }} --no-restore
+
+    - name: Package release
+      if: ${{ matrix.configuration == 'Release' }}
+      shell: pwsh
+      run: |
+        .\publish-release.ps1 -version $env:FULL_VERSION_NUMBER
+        gci *.zip -recurse
+
+    - name: Upload
+      if: ${{ matrix.configuration == 'Release' }}
+      uses: actions/upload-artifact@v2
+      with:
+        name: Redate-${{ env.FULL_VERSION_NUMBER }}
+        path: |
+          bin/Release/Redate*
+          !bin/Release/Redate*.zip
+        if-no-files-found: error
